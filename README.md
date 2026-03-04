@@ -2,11 +2,6 @@
 
 A stateless conversational agent exposed as an HTTP API, powered by Azure OpenAI with API key authentication. No Azure CLI, managed identity, or Agent Framework required — just set two environment variables and run.
 
-## Prerequisites
-
-- Python 3.10+
-- The resource's **endpoint** and **API key** (found in the Azure Portal under your Azure OpenAI resource → Keys and Endpoint)
-
 ## Setup
 
 ### 1. Clone the repository
