@@ -5,7 +5,6 @@ A stateless conversational agent exposed as an HTTP API, powered by Azure OpenAI
 ## Prerequisites
 
 - Python 3.10+
-- An Azure OpenAI resource with a deployed chat model
 - The resource's **endpoint** and **API key** (found in the Azure Portal under your Azure OpenAI resource → Keys and Endpoint)
 
 ## Setup
