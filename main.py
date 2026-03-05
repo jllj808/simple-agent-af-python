@@ -1,15 +1,20 @@
 import os
+import pathlib
 from contextlib import asynccontextmanager
 
+import anthropic
 import uvicorn
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from openai import AzureOpenAI
 from openai.types.chat import ChatCompletionMessageParam
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
+
 """
-Simple Azure OpenAI Agent — HTTP Server
+Simple Azure OpenAI / Anthropic Agent — HTTP Server
 
 Exposes the agent as a local FastAPI endpoint so that other services
 (e.g. the Arena evaluator) can interact with it over HTTP.
@@ -24,18 +29,32 @@ Run
 ---
     python main.py                  # starts on http://localhost:8000
     AGENT_PORT=9000 python main.py  # custom port
+
+Provider toggle
+---------------
+Set INFERENCE_PROVIDER=azure (default) or INFERENCE_PROVIDER=anthropic in .env.
 """
 
 load_dotenv()
 
-AZURE_OPENAI_ENDPOINT = os.environ["AZURE_OPENAI_ENDPOINT"]
-AZURE_OPENAI_API_KEY = os.environ["AZURE_OPENAI_API_KEY"]
+INFERENCE_PROVIDER = os.environ.get("INFERENCE_PROVIDER", "azure").lower()
+
+AZURE_OPENAI_ENDPOINT = os.environ.get("AZURE_OPENAI_ENDPOINT", "")
+AZURE_OPENAI_API_KEY = os.environ.get("AZURE_OPENAI_API_KEY", "")
 AZURE_OPENAI_DEPLOYMENT = os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-4.1-mini")
 AZURE_OPENAI_API_VERSION = os.environ.get(
     "AZURE_OPENAI_API_VERSION", "2025-04-01-preview"
 )
+
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6")
+
 AGENT_PORT = int(os.environ.get("AGENT_PORT", "8000"))
 
+
+
+
+## Takes default sytem prompt is nothing is provded in UI.
 DEFAULT_SYSTEM_PROMPT = """
 You are a helpful assistant.
 """.strip()
@@ -45,27 +64,57 @@ You are a helpful assistant.
 
 
 class SimpleAgent:
-    """Lightweight wrapper around Azure OpenAI chat completions."""
+    """Lightweight wrapper around Azure OpenAI or Anthropic chat completions.
+
+    Internally stores messages in OpenAI format (list of role/content dicts).
+    When using Anthropic, the system message is extracted and passed separately.
+    """
 
     def __init__(self, name: str, instructions: str):
         self.name = name
-        self.client = AzureOpenAI(
-            azure_endpoint=AZURE_OPENAI_ENDPOINT,
-            api_key=AZURE_OPENAI_API_KEY,
-            api_version=AZURE_OPENAI_API_VERSION,
-        )
-        self.messages: list[ChatCompletionMessageParam] = [{"role": "system", "content": instructions}]
+        self.system_prompt = instructions
+        self.messages: list[ChatCompletionMessageParam] = []
+
+        if INFERENCE_PROVIDER == "anthropic":
+            self._client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        else:
+            self._client = AzureOpenAI(
+                azure_endpoint=AZURE_OPENAI_ENDPOINT,
+                api_key=AZURE_OPENAI_API_KEY,
+                api_version=AZURE_OPENAI_API_VERSION,
+            )
 
     def run(self, user_message: str) -> str:
         """Send a message and return the assistant's reply."""
         self.messages.append({"role": "user", "content": user_message})
-        response = self.client.chat.completions.create(
-            model=AZURE_OPENAI_DEPLOYMENT,
-            messages=self.messages,
-        )
-        reply = response.choices[0].message.content or ""
+
+        if INFERENCE_PROVIDER == "anthropic":
+            reply = self._run_anthropic()
+        else:
+            reply = self._run_azure()
+
         self.messages.append({"role": "assistant", "content": reply})
         return reply
+
+    def _run_azure(self) -> str:
+        full_messages: list[ChatCompletionMessageParam] = [
+            {"role": "system", "content": self.system_prompt},
+            *self.messages,
+        ]
+        response = self._client.chat.completions.create(
+            model=AZURE_OPENAI_DEPLOYMENT,
+            messages=full_messages,
+        )
+        return response.choices[0].message.content or ""
+
+    def _run_anthropic(self) -> str:
+        response = self._client.messages.create(
+            model=ANTHROPIC_MODEL,
+            max_tokens=8096,
+            system=self.system_prompt,
+            messages=self.messages,
+        )
+        return response.content[0].text
 
 
 # ── Request / Response models ─────────────────────────────────────────────────
@@ -86,10 +135,18 @@ class ChatResponse(BaseModel):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print(f"Agent server listening on http://localhost:{AGENT_PORT}")
+    print(f"Inference provider: {INFERENCE_PROVIDER}")
     yield
 
 
 app = FastAPI(title="SimpleAgent Server", lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type"],
+)
 
 
 @app.post("/chat", response_model=ChatResponse)
@@ -107,9 +164,14 @@ def chat(req: ChatRequest):
     return ChatResponse(reply=reply)
 
 
+@app.get("/")
+def ui():
+    return FileResponse(pathlib.Path(__file__).parent / "index.html")
+
+
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {"status": "ok", "provider": INFERENCE_PROVIDER}
 
 
 if __name__ == "__main__":
