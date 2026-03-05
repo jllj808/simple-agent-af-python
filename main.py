@@ -1,3 +1,4 @@
+import json
 import os
 import pathlib
 import re
@@ -88,6 +89,30 @@ def search_knowledge_base(query: str) -> str:
     return "\n\n".join(f"[{h.title()}]\n{b}" for _, h, b in top)
 
 
+_TOOLS_OPENAI = [
+    {
+        "type": "function",
+        "function": {
+            "name": "search_knowledge_base",
+            "description": (
+                "Search the Microsoft knowledge base for product info, "
+                "common issues, and support policies relevant to the customer query."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Keywords describing the customer's issue or product area.",
+                    }
+                },
+                "required": ["query"],
+            },
+        },
+    }
+]
+
+
 ## Takes default sytem prompt is nothing is provded in UI.
 DEFAULT_SYSTEM_PROMPT = """
 You are a helpful assistant.
@@ -135,11 +160,29 @@ class SimpleAgent:
             {"role": "system", "content": self.system_prompt},
             *self.messages,
         ]
-        response = self._client.chat.completions.create(
-            model=AZURE_OPENAI_DEPLOYMENT,
-            messages=full_messages,
-        )
-        return response.choices[0].message.content or ""
+        for _ in range(5):
+            response = self._client.chat.completions.create(
+                model=AZURE_OPENAI_DEPLOYMENT,
+                messages=full_messages,
+                tools=_TOOLS_OPENAI,
+                tool_choice="auto",
+            )
+            msg = response.choices[0].message
+            full_messages.append(msg)  # type: ignore[arg-type]
+
+            if response.choices[0].finish_reason != "tool_calls" or not msg.tool_calls:
+                return msg.content or ""
+
+            for tc in msg.tool_calls:
+                args = json.loads(tc.function.arguments)
+                result = search_knowledge_base(args.get("query", ""))
+                full_messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": result,
+                })
+
+        return full_messages[-1].get("content", "") if isinstance(full_messages[-1], dict) else ""
 
     def _run_anthropic(self) -> str:
         response = self._client.messages.create(
