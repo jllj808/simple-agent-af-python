@@ -113,6 +113,27 @@ _TOOLS_OPENAI = [
 ]
 
 
+_TOOLS_ANTHROPIC = [
+    {
+        "name": "search_knowledge_base",
+        "description": (
+            "Search the Microsoft knowledge base for product info, "
+            "common issues, and support policies relevant to the customer query."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Keywords describing the customer's issue or product area.",
+                }
+            },
+            "required": ["query"],
+        },
+    }
+]
+
+
 ## Takes default sytem prompt is nothing is provded in UI.
 DEFAULT_SYSTEM_PROMPT = """
 You are a helpful assistant.
@@ -188,13 +209,38 @@ class SimpleAgent:
         return "I was unable to complete the request within the tool call limit. Please try again."
 
     def _run_anthropic(self) -> str:
-        response = self._client.messages.create(
-            model=ANTHROPIC_MODEL,
-            max_tokens=8096,
-            system=self.system_prompt,
-            messages=self.messages,
-        )
-        return response.content[0].text
+        messages = list(self.messages)  # shallow copy; system prompt passed separately
+        for _ in range(5):
+            response = self._client.messages.create(
+                model=ANTHROPIC_MODEL,
+                max_tokens=8096,
+                system=self.system_prompt,
+                messages=messages,
+                tools=_TOOLS_ANTHROPIC,
+            )
+
+            if response.stop_reason != "tool_use":
+                for block in response.content:
+                    if hasattr(block, "text"):
+                        return block.text
+                return ""
+
+            # Append assistant turn (may include text + tool_use blocks)
+            messages.append({"role": "assistant", "content": response.content})
+
+            # Build tool_result blocks for every tool_use block
+            tool_results = []
+            for block in response.content:
+                if block.type == "tool_use":
+                    result = search_knowledge_base(block.input.get("query", ""))
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": result,
+                    })
+            messages.append({"role": "user", "content": tool_results})
+
+        return "I was unable to complete the request within the tool call limit. Please try again."
 
 
 # ── Request / Response models ─────────────────────────────────────────────────
