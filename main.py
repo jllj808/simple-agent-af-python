@@ -139,6 +139,9 @@ DEFAULT_SYSTEM_PROMPT = """
 You are a helpful assistant.
 """.strip()
 
+_CS_PROMPT_PATH = pathlib.Path(__file__).parent.parent / ".pm" / "cs_agent_prompt.md"
+_CS_PROMPT_TEXT = _CS_PROMPT_PATH.read_text(encoding="utf-8") if _CS_PROMPT_PATH.exists() else DEFAULT_SYSTEM_PROMPT
+
 
 # ── Agent ─────────────────────────────────────────────────────────────────────
 
@@ -255,6 +258,11 @@ class ChatResponse(BaseModel):
     reply: str
 
 
+class EvalRequest(BaseModel):
+    message: str
+    system_prompt: str | None = None
+
+
 # ── FastAPI app ───────────────────────────────────────────────────────────────
 
 
@@ -298,6 +306,23 @@ def ui():
 @app.get("/health")
 def health():
     return {"status": "ok", "provider": INFERENCE_PROVIDER}
+
+
+@app.get("/eval/prompt")
+def eval_prompt():
+    return {"prompt": _CS_PROMPT_TEXT}
+
+
+@app.post("/eval", response_model=ChatResponse)
+def eval_chat(req: EvalRequest):
+    """
+    Eval endpoint — same as /chat but defaults to the CS agent system prompt
+    loaded from .pm/cs_agent_prompt.md instead of the generic default.
+    """
+    instructions = req.system_prompt or _CS_PROMPT_TEXT
+    agent = SimpleAgent(name="EvalEndpoint", instructions=instructions)
+    reply = agent.run(req.message)
+    return ChatResponse(reply=reply)
 
 
 if __name__ == "__main__":
