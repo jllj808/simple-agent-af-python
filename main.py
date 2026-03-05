@@ -174,7 +174,10 @@ class SimpleAgent:
                 return msg.content or ""
 
             for tc in msg.tool_calls:
-                args = json.loads(tc.function.arguments)
+                try:
+                    args = json.loads(tc.function.arguments)
+                except json.JSONDecodeError:
+                    args = {}
                 result = search_knowledge_base(args.get("query", ""))
                 full_messages.append({
                     "role": "tool",
@@ -182,7 +185,7 @@ class SimpleAgent:
                     "content": result,
                 })
 
-        return full_messages[-1].get("content", "") if isinstance(full_messages[-1], dict) else ""
+        return "I was unable to complete the request within the tool call limit. Please try again."
 
     def _run_anthropic(self) -> str:
         response = self._client.messages.create(
