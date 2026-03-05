@@ -1,5 +1,6 @@
 import os
 import pathlib
+import re
 from contextlib import asynccontextmanager
 
 import anthropic
@@ -60,7 +61,6 @@ _KB_TEXT = _KB_PATH.read_text(encoding="utf-8") if _KB_PATH.exists() else ""
 
 def _parse_kb_sections(text: str) -> list[tuple[str, str]]:
     """Return list of (header, body) tuples split on [Header] markers."""
-    import re
     parts = re.split(r"(\[[^\]]+\])", text)
     sections = []
     for i in range(1, len(parts) - 1, 2):
