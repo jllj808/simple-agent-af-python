@@ -52,6 +52,40 @@ ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6")
 AGENT_PORT = int(os.environ.get("AGENT_PORT", "8000"))
 
 
+# ── Knowledge base ─────────────────────────────────────────────────────────────
+
+_KB_PATH = pathlib.Path(__file__).parent / "knowledge_base.txt"
+_KB_TEXT = _KB_PATH.read_text(encoding="utf-8") if _KB_PATH.exists() else ""
+
+
+def _parse_kb_sections(text: str) -> list[tuple[str, str]]:
+    """Return list of (header, body) tuples split on [Header] markers."""
+    import re
+    parts = re.split(r"(\[[^\]]+\])", text)
+    sections = []
+    for i in range(1, len(parts) - 1, 2):
+        header = parts[i].strip("[]").lower()
+        body = parts[i + 1].strip()
+        sections.append((header, body))
+    return sections
+
+
+_KB_SECTIONS = _parse_kb_sections(_KB_TEXT)
+
+
+def search_knowledge_base(query: str) -> str:
+    """Return the top matching KB sections for a query (keyword overlap score)."""
+    if not _KB_SECTIONS:
+        return "Knowledge base is empty."
+    query_words = set(query.lower().split())
+    scored = []
+    for header, body in _KB_SECTIONS:
+        section_words = set((header + " " + body).lower().split())
+        score = len(query_words & section_words)
+        scored.append((score, header, body))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    top = [s for s in scored if s[0] > 0][:3] or scored[:1]
+    return "\n\n".join(f"[{h.title()}]\n{b}" for _, h, b in top)
 
 
 ## Takes default sytem prompt is nothing is provded in UI.
